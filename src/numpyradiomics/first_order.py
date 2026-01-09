@@ -62,6 +62,8 @@ def first_order_features(input_image, input_mask, voxelVolume=1, binWidth=25, vo
     kurt = kurtosis(roi, fisher=False)
     energy = np.sum((roi + voxelArrayShift)**2)
     total_energy = voxelVolume * energy  # same as energy in pyradiomics
+    coefficient_of_variation = sdev / mean
+    heterogeneity = iqr / median
 
     # Robust MAD: only voxels between 10th and 90th percentile
     roi_robust = roi[(roi >= perc10) & (roi <= perc90)]
@@ -100,5 +102,7 @@ def first_order_features(input_image, input_mask, voxelVolume=1, binWidth=25, vo
         "Kurtosis": kurt,
         "Variance": variance,
         "Uniformity": uniformity,
+        "CoefficientOfVariation": coefficient_of_variation,
+        "Heterogeneity": heterogeneity,
     }
 

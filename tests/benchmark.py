@@ -12,17 +12,13 @@ from numpyradiomics import first_order_features, glcm_features, glszm_features, 
 RTOL = 1e-5
 
 
-def to_itk(image):
-    """Convert NumPy array to SimpleITK image."""
-    return sitk.GetImageFromArray(image.astype(np.float64))
-
 
 # ------------------- TEST TEXTURE FEATURES ------------------- #
 def test_first_order_features():
     img = np.array([[0, 1], [2, 3]], dtype=np.float64)
     mask = np.ones_like(img)
 
-    itk_img = to_itk(img)
+    itk_img = sitk.GetImageFromArray(img.astype(np.float64))
     itk_mask = sitk.GetImageFromArray(mask.astype(np.uint8))
 
     # Explicit PyRadiomics settings
@@ -57,11 +53,11 @@ def test_glcm_features():
     img = np.array([[0, 1], [2, 3]], dtype=np.float64)
     mask = np.ones_like(img)
     
-    itk_img = to_itk(img)
+    itk_img = sitk.GetImageFromArray(img.astype(np.float64))
     itk_mask = sitk.GetImageFromArray(mask.astype(np.uint8))
     
-    result_py = glcm.RadiomicsGLCM(itk_img, itk_mask, distances=[1]).execute()
-    result_custom = glcm_features(img, mask, distances=[1], binWidth=1)
+    result_py = glcm.RadiomicsGLCM(itk_img, itk_mask).execute()
+    result_custom = glcm_features(img, mask)
     
     for key in result_py:
         assert np.isclose(result_py[key], result_custom[key], rtol=RTOL), f"Mismatch in {key}"
@@ -70,22 +66,23 @@ def test_glcm_features():
 def test_glszm_features():
     img = np.array([[0, 1], [2, 3]], dtype=np.float64)
     mask = np.ones_like(img)
-    
-    itk_img = to_itk(img)
+
+    itk_img = sitk.GetImageFromArray(img.astype(np.float64))
     itk_mask = sitk.GetImageFromArray(mask.astype(np.uint8))
-    
+
     result_py = glszm.RadiomicsGLSZM(itk_img, itk_mask).execute()
-    result_custom = glszm_features(img, mask, binWidth=1)
-    
+    result_custom = glszm_features(img, mask)
+
     for key in result_py:
-        assert np.isclose(result_py[key], result_custom[key], rtol=RTOL), f"Mismatch in {key}"
+        assert np.isclose(result_py[key], result_custom[key], rtol=1e-6), f"Mismatch in {key}"
+
 
 
 def test_glrlm_features():
     img = np.array([[0, 1], [2, 3]], dtype=np.float64)
     mask = np.ones_like(img)
     
-    itk_img = to_itk(img)
+    itk_img = sitk.GetImageFromArray(img.astype(np.float64))
     itk_mask = sitk.GetImageFromArray(mask.astype(np.uint8))
     
     result_py = glrlm.RadiomicsGLRLM(itk_img, itk_mask).execute()
@@ -99,7 +96,7 @@ def test_gldm_features():
     img = np.array([[0, 1], [2, 3]], dtype=np.float64)
     mask = np.ones_like(img)
     
-    itk_img = to_itk(img)
+    itk_img = sitk.GetImageFromArray(img.astype(np.float64))
     itk_mask = sitk.GetImageFromArray(mask.astype(np.uint8))
     
     result_py = gldm.RadiomicsGLDM(itk_img, itk_mask).execute()
@@ -113,7 +110,7 @@ def test_ngtdm_features():
     img = np.array([[0, 1], [2, 3]], dtype=np.float64)
     mask = np.ones_like(img)
     
-    itk_img = to_itk(img)
+    itk_img = sitk.GetImageFromArray(img.astype(np.float64))
     itk_mask = sitk.GetImageFromArray(mask.astype(np.uint8))
     
     result_py = ngtdm.RadiomicsNGTDM(itk_img, itk_mask).execute()
@@ -156,6 +153,6 @@ if __name__=='__main__':
     # test_ngtdm_features()
     # test_gldm_features()
     # test_glrlm_features()
-    # test_glszm_features()
+    test_glszm_features()
     # test_glcm_features()
-    test_first_order_features()
+    # test_first_order_features()
