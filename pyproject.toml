@@ -1,44 +1,33 @@
 # https://packaging.python.org/en/latest/specifications/pyproject-toml/#pyproject-toml-spec
 
 [build-system]
-build-backend = 'setuptools.build_meta'
-requires = ['setuptools>=61.2']
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "numpyradiomics"
 version = "0.0.2"
 dependencies = [
-  'numpy',
-  'scipy',
-  'scikit-image',
+    "numpy>=1.20",
+    "scipy>=1.7",
+    "scikit-image>=0.18",
 ]
 # optional information
-description = "A python-native implementation of pyradiomics"
+description = "A light-weight python-native implementation of pyradiomics"
 readme = "README.md"
 authors = [
   { name = "Steven Sourbron", email = "s.sourbron@sheffield.ac.uk" },
 ]
 license = "Apache-2.0"
 classifiers = [
-  # How mature is this project? Common values are
-  #   3 - Alpha
-  #   4 - Beta
-  #   5 - Production/Stable
-  'Development Status :: 3 - Alpha',
-
-  # Indicate who your project is intended for
-  'Intended Audience :: Developers',
-  'Intended Audience :: Science/Research',
-  'Topic :: Scientific/Engineering',
-  'Operating System :: OS Independent',
-  "Programming Language :: Python",
-  "Programming Language :: Python :: 3"
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Intended Audience :: Science/Research",
 ]
-keywords = [
-  'python', 
-  "medical imaging",  
-  "radiomics",
-]
+keywords = ["radiomics", "medical-imaging", "shape-analysis", "numpy", "scikit-image"]
+requires-python = ">=3.8"
 
 
 [project.urls]

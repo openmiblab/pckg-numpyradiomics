@@ -1,31 +1,26 @@
 SOPs for maintainers
 ********************
 
-Building a virtual environment
-------------------------------
+Building a virtual environment for development
+----------------------------------------------
 
-Clone numpyradiomics locally
+PyRadiomics does not work with latest python and numpy versions 
+so for running the benchmarks tests you need to install a dedicated 
+environment with lower python and numpy versions:
 
-cd to top folder
+On Windows:
+>>> py -3.10 -m venv .venv
+>>> .venv/Scripts/activate 
 
-Use python 3.10 to create a virtual environment, eg. 
-On windows:
->>> C:\Users\md1spsx\AppData\Local\Programs\Python\Python310\python.exe -m venv .venv           
->>> .venv/Scripts/activate        
+Then install numpyradiomics
 
-Then select the Python interpreter in the .venv folder. In VSCode:
-View > Command Palette > Python select interpreter -> enter interpreter path 
-(.venv/Scripts/python.exe)
+>>> pip install -e .
 
+Downgrade numpy
 
-Installation
-------------
+>>> pip install "numpy<2.0.0"
 
-Install numpyradiomics from source:
-
->>> pip install -e path\to\numpyradiomics
-
-Install dev requirements:
+Install dev requirements (pyradiomics 3.0.1)
 
 >>> pip install -r dev/requirements.txt
 
