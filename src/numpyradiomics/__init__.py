@@ -6,7 +6,7 @@ from .mod_glrlm import glrlm, glrlm_units
 from .mod_glszm import glszm, glszm_units
 from .mod_ngtdm import ngtdm, ngtdm_units
 
-# --- Wrapper & Helper Functions ---
+# --- Wrapper Functions ---
 from .mod_shape import shape, shape_units
 from .mod_firstorder import firstorder, firstorder_units
 from .mod_texture import texture, texture_units
@@ -25,5 +25,5 @@ __all__ = [
     'shape', 'shape_units',
     'firstorder', 'firstorder_units',
     'texture', 'texture_units',
-    'dro'
+    'dro',
 ]

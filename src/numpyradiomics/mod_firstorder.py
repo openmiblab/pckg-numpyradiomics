@@ -1,8 +1,19 @@
+from typing import Optional, Union
 import numpy as np
 from scipy.stats import skew, kurtosis
 
 
-def firstorder(image, mask, voxelVolume=1, binWidth=25, voxelArrayShift=0, extend=True):
+from .mod_preproc import _discretize
+
+def firstorder(
+    image: np.ndarray, 
+    mask: np.ndarray, 
+    voxelVolume: float = 1.0, 
+    binWidth: float = 25, 
+    binCount: Optional[int] = None,
+    voxelArrayShift: float = 0.0, 
+    extend: bool = True
+):
     """
     Compute first-order (intensity-based) statistics for a given image and mask,
     replicating Pyradiomics first-order features.
@@ -11,10 +22,12 @@ def firstorder(image, mask, voxelVolume=1, binWidth=25, voxelArrayShift=0, exten
         image (np.ndarray): 3D image array containing voxel intensities.
         mask (np.ndarray): 3D mask array (same shape as image), where non-zero values indicate the ROI.
         voxelVolume (float, optional): Volume of a single voxel (used to scale TotalEnergy). Default is 1.
-        binWidth (float, optional): Width of bins for histogram-based features (entropy, uniformity). Default is 25.
+        binWidth (float, optional): Width of bins for 'Fixed Bin Width' discretization (used for Entropy/Uniformity). Default is 25.
+        binCount (int, optional): Number of bins for 'Fixed Bin Count' discretization. 
+                                  If specified, overrides binWidth logic. Default is None.
         voxelArrayShift (float, optional): Value to add to intensities before computing Energy/RMS. Default is 0.
         extend (bool, optional): If True, returns extended features not strictly in the PyRadiomics standard set 
-                                (05/95 Percentile, CoeffOfVar, Heterogeneity). Default is True.
+                                 (05/95 Percentile, CoeffOfVar, Heterogeneity). Default is True.
 
     Returns:
         dict: Dictionary containing first-order feature names and their computed values.
@@ -66,35 +79,55 @@ def firstorder(image, mask, voxelVolume=1, binWidth=25, voxelArrayShift=0, exten
     if roi.size == 0:
         raise ValueError("The mask does not contain any voxels.")
 
-    # Basic statistics
+    # --- Basic Statistics (Calculated on Continuous/Raw Values) ---
     minimum = np.min(roi)
     maximum = np.max(roi)
     mean = np.mean(roi)
     median = np.median(roi)
     variance = np.var(roi)
     sdev = np.std(roi)
-    rms = np.sqrt(np.mean((roi + voxelArrayShift)**2))
+    
+    # Energy terms use the shifted array (if shift is provided)
+    roi_shifted = roi + voxelArrayShift
+    rms = np.sqrt(np.mean(roi_shifted**2))
+    energy = np.sum(roi_shifted**2)
+    total_energy = voxelVolume * energy 
+    
+    # Percentiles
     perc05 = np.percentile(roi, 5)
     perc10 = np.percentile(roi, 10)
     perc90 = np.percentile(roi, 90)
     perc95 = np.percentile(roi, 95)
     iqr = np.percentile(roi, 75) - np.percentile(roi, 25)
+    
     mad = np.mean(np.abs(roi - mean))  # Mean absolute deviation
     range_val = maximum - minimum
     skewness = skew(roi)
+    
+    # Fisher=False returns Pearson kurtosis (normal distribution = 3.0), matching PyRadiomics
     kurt = kurtosis(roi, fisher=False)
-    energy = np.sum((roi + voxelArrayShift)**2)
-    total_energy = voxelVolume * energy  # same as energy in pyradiomics
-    coefficient_of_variation = sdev / mean
-    heterogeneity = iqr / median
+    
+    coefficient_of_variation = sdev / mean if mean != 0 else 0.0
+    heterogeneity = iqr / median if median != 0 else 0.0
 
     # Robust MAD: only voxels between 10th and 90th percentile
+    # Note: PyRadiomics definition excludes voxels strictly outside the range (inclusive?)
+    # Usually: p10 <= x <= p90
     roi_robust = roi[(roi >= perc10) & (roi <= perc90)]
-    rmad = np.mean(np.abs(roi_robust - np.mean(roi_robust)))
+    if roi_robust.size > 0:
+        rmad = np.mean(np.abs(roi_robust - np.mean(roi_robust)))
+    else:
+        rmad = 0.0
 
-    # Histogram-based features
-    discretized = np.floor((roi - minimum) / binWidth).astype(np.int32)
-    _, counts = np.unique(discretized, return_counts=True)
+    # --- Histogram-based Features (Calculated on Discretized Values) ---
+    # We use the centralized discretize function to ensure consistency
+    # This aligns 0-based bins correctly and handles binCount dynamic sizing
+    discretized_roi = _discretize(roi, binWidth=binWidth, binCount=binCount)
+    
+    # Get counts of unique discretized values (bins)
+    _, counts = np.unique(discretized_roi, return_counts=True)
+    
+    # Calculate probabilities
     probs = counts.astype(np.float64) / counts.sum()
 
     # Entropy: -sum(p * log2(p))
@@ -124,6 +157,7 @@ def firstorder(image, mask, voxelVolume=1, binWidth=25, voxelArrayShift=0, exten
         "Variance": variance,
         "Uniformity": uniformity,
     }
+    
     extended_features = {
         "05Percentile": perc05,
         "95Percentile": perc95,
@@ -132,7 +166,7 @@ def firstorder(image, mask, voxelVolume=1, binWidth=25, voxelArrayShift=0, exten
     }
 
     if extend:
-        features = features | extended_features
+        features.update(extended_features)
 
     return features
 

@@ -1,7 +1,15 @@
 import numpy as np
-from scipy.ndimage import convolve
+from typing import Optional
 
-def ngtdm(image, mask, binWidth=25, distance=1):
+from .mod_preproc import _discretize_image
+
+def ngtdm(
+    image: np.ndarray, 
+    mask: np.ndarray, 
+    binWidth: float = 25, 
+    binCount: Optional[int] = None,
+    distance: int = 1
+):
     """
     Compute 5 Pyradiomics-style NGTDM (Neighborhood Gray Tone Difference Matrix) features.
 
@@ -11,21 +19,18 @@ def ngtdm(image, mask, binWidth=25, distance=1):
     Args:
         image (np.ndarray): 3D image array containing voxel intensities.
         mask (np.ndarray): 3D mask array (same shape as image), where non-zero values indicate the ROI.
-        binWidth (float, optional): Width of bins for discretization. Default is 25.
+        binWidth (float, optional): Width of bins for 'Fixed Bin Width' discretization. Default is 25.
+        binCount (int, optional): Number of bins for 'Fixed Bin Count' discretization. 
+                                  If specified, overrides binWidth logic. Default is None.
         distance (int, optional): The distance (radius) of the neighborhood kernel. Default is 1.
 
     Returns:
         dict: Dictionary containing the 5 NGTDM features:
             - **Coarseness**: Measures the average difference between the center voxel and its neighborhood.
-                              Higher values indicate a lower spatial change rate and locally more uniform texture.
             - **Contrast**: Measures the spatial intensity change rate.
-                              Higher values indicate large changes in intensity between neighboring areas.
             - **Busyness**: Measures the rapid changes of intensity between pixels and their neighborhood.
-                              High values indicate a "busy" image (rapid changes).
             - **Complexity**: Measures the information content of the image.
-                              High values indicate non-uniform and rapid changes in gray levels.
             - **Strength**: Measures the distinctness of the primitives in the image.
-                              High values indicate easily definable and visible structures.
 
     Example:
         >>> import numpyradiomics as npr
@@ -42,101 +47,132 @@ def ngtdm(image, mask, binWidth=25, distance=1):
     if not np.any(roi_mask):
         raise ValueError("Mask contains no voxels.")
 
-    roi_image = image.copy()
+    # --- Step 1: Discretization ---
+    img_quant = _discretize_image(image, mask, binWidth=binWidth, binCount=binCount)
     
-    # Restrict ROI for min/max to match PyRadiomics ROI-based binning
-    masked_pixels = roi_image[roi_mask]
-    min_val = np.min(masked_pixels)
-    max_val = np.max(masked_pixels)
+    N_bins = int(img_quant.max())
     
-    # Handle degenerate case (Flat Region)
-    if max_val == min_val:
-        # Coarseness caps at 1e6 for flat regions, others are 0
+    if N_bins <= 1:
         return {
-            "Coarseness": 1000000.0, 
-            "Contrast": 0.0, 
-            "Busyness": 0.0, 
-            "Complexity": 0.0, 
-            "Strength": 0.0
+            "Coarseness": 1000000.0, "Contrast": 0.0, "Busyness": 0.0, 
+            "Complexity": 0.0, "Strength": 0.0
         }
 
-    # --- 1. Quantization (PyRadiomics Style) ---
-    # PyRadiomics uses floor((x - min) / binWidth) + 1
-    # resulting in 1-based indices: 1, 2, ..., N_bins
+    # --- Step 2: Calculate Neighborhood Mean (Dynamic) ---
     
-    # Calculate exact number of bins needed
-    N_bins = int(np.floor((max_val - min_val) / binWidth)) + 1
+    # PyRadiomics iterates over all angles defined by 'distance'.
+    # In 3D with d=1, this is the 26-connectivity (Chebyshev distance 1).
+    # We simulate this by shifting the array in all 26 directions.
     
-    # Discretize
-    # We use float temporarily to handle the division
-    pixel_bins = np.floor((roi_image - min_val) / binWidth) + 1
+    dims = image.ndim
     
-    # Clip to ensure numerical stability at the max_val edge
-    pixel_bins = np.clip(pixel_bins, 1, N_bins).astype(int)
+    # Generate offsets (Chebyshev distance)
+    # Exclude (0,0,0)
+    offsets = []
+    if dims == 3:
+        for z in range(-distance, distance + 1):
+            for y in range(-distance, distance + 1):
+                for x in range(-distance, distance + 1):
+                    if z == 0 and y == 0 and x == 0:
+                        continue
+                    offsets.append((z, y, x))
+    elif dims == 2:
+        for y in range(-distance, distance + 1):
+            for x in range(-distance, distance + 1):
+                if y == 0 and x == 0:
+                    continue
+                offsets.append((y, x))
+                
+    # Accumulators for the mean calculation
+    sum_neighbor_int = np.zeros_like(image, dtype=np.float64)
+    count_neighbors = np.zeros_like(image, dtype=np.float64)
     
-    # Apply Mask (0 is background/ignored now, 1..N are valid bins)
-    img_quant = pixel_bins * roi_mask
+    # Vectorized Sliding Window using Slicing
+    for shift in offsets:
+        # Create source (shifted) and destination slices
+        src_slices = []
+        dst_slices = []
+        
+        for s in shift:
+            if s > 0:
+                src_slices.append(slice(0, -s))
+                dst_slices.append(slice(s, None))
+            elif s < 0:
+                src_slices.append(slice(-s, None))
+                dst_slices.append(slice(0, s))
+            else:
+                src_slices.append(slice(None))
+                dst_slices.append(slice(None))
+                
+        src_vals = img_quant[tuple(src_slices)]
+        dst_vals = img_quant[tuple(dst_slices)] # This is the center pixel location
+        
+        # Condition: Neighbor must be inside ROI (val > 0)
+        # We accumulate at the destination (center) only if the source (neighbor) is valid
+        valid_neighbor = (src_vals > 0)
+        
+        # Add neighbor intensity to the center pixel's accumulator
+        # We only add to pixels that are themselves in the ROI (dst_vals > 0)
+        # But for efficiency, we can just add to the whole array view 
+        # because we will mask the final result later.
+        
+        # Accumulate Sum
+        # Note: img_quant has values 1..N.
+        # PyRadiomics sums the GRAY LEVELS (indices), not the raw intensities.
+        # Since img_quant matches PyRadiomics 'gray levels' (1-based), we sum img_quant.
+        
+        # We use simple += on the sliced views
+        sum_neighbor_int[tuple(dst_slices)][valid_neighbor] += src_vals[valid_neighbor]
+        count_neighbors[tuple(dst_slices)][valid_neighbor] += 1
 
-    # --- 2. Neighborhood Pre-processing ---
-    # Kernel: 3D cube with 0 at center
-    k_size = 2 * distance + 1
-    kernel = np.ones((k_size, k_size, k_size), dtype=np.float64)
-    kernel[distance, distance, distance] = 0
+    # --- Step 3: Identify Valid Centers and Compute Means ---
     
-    # Calculate sum and count of neighbors
-    # Note: img_quant has values 1..N inside mask, 0 outside.
-    # convolve with cval=0 treats outside as 0 (ignored).
-    neighbor_sum = convolve(img_quant.astype(float), kernel, mode='constant', cval=0)
-    neighbor_count = convolve(roi_mask.astype(float), kernel, mode='constant', cval=0)
-
-    # Valid neighborhood: inside mask AND has neighbors
-    valid_mask = (neighbor_count > 0) & roi_mask
+    # A voxel is valid if:
+    # 1. It is in the ROI (img_quant > 0)
+    # 2. It has at least one valid neighbor (count_neighbors > 0)
+    #    (Edge cases with 0 neighbors are excluded from NGTDM)
     
-    # Calculate average neighborhood intensity (A_bar)
-    # Note: neighbor_sum sums indices (1..N). This matches PyRadiomics 
-    # which calculates texture features on the discretized indices.
-    local_mean = np.zeros_like(neighbor_sum)
-    local_mean[valid_mask] = neighbor_sum[valid_mask] / neighbor_count[valid_mask]
+    valid_mask = (img_quant > 0) & (count_neighbors > 0)
+    
+    if not np.any(valid_mask):
+         return {"Coarseness": 1e6, "Contrast": 0.0, "Busyness": 0.0, "Complexity": 0.0, "Strength": 0.0}
 
-    # --- 3. Build NGTDM Matrix (N_i and S_i) ---
-    # We need vectors of length N_bins (indices 0..N-1 mapped to levels 1..N)
-    N_i = np.zeros(N_bins, dtype=np.float64)
+    # Extract valid data
+    valid_centers = img_quant[valid_mask]
+    valid_sums = sum_neighbor_int[valid_mask]
+    valid_counts = count_neighbors[valid_mask]
+    
+    # A_bar
+    neighborhood_means = valid_sums / valid_counts
+
+    # --- Step 4: Build NGTDM Matrix (N_i and S_i) ---
+    
+    # 0-based indices
+    idx_values = valid_centers - 1
+    
+    # N_i: Count of voxels with gray level i
+    N_i = np.bincount(idx_values, minlength=N_bins).astype(np.float64)
+    
+    # S_i: Sum of absolute differences |i - mean|
     S_i = np.zeros(N_bins, dtype=np.float64)
+    abs_diffs = np.abs(valid_centers - neighborhood_means)
+    np.add.at(S_i, idx_values, abs_diffs)
 
-    valid_voxels = img_quant[valid_mask]     # Values are 1..N
-    valid_means = local_mean[valid_mask]
+    # --- Step 5: Compute Features ---
     
-    # Vectorized accumulation
-    # Subtract 1 from voxel values to get 0-based array indices
-    voxel_indices = valid_voxels - 1 
-    
-    # Count occurrences (N_i)
-    N_i = np.bincount(voxel_indices, minlength=N_bins).astype(np.float64)
-    
-    # Calculate S_i: Sum of absolute differences |i - mean|
-    # We iterate because bincount cannot sum a derived float difference easily
-    for i in range(N_bins):
-        # i is 0-based index, corresponding to Gray Level (i + 1)
-        level_val = i + 1
-        matches = (valid_voxels == level_val)
-        if np.any(matches):
-            # Difference between Integer Level and Float Mean
-            S_i[i] = np.sum(np.abs(level_val - valid_means[matches]))
-
-    # --- 4. Compute Features ---
-    
-    N_total = np.sum(N_i) # N_vp (Valid Pixels)
-    if N_total == 0:
+    N_total = np.sum(N_i) # N_vp
+    if N_total <= 0:
         return {"Coarseness": 1e6, "Contrast": 0.0, "Busyness": 0.0, "Complexity": 0.0, "Strength": 0.0}
 
     p_i = N_i / N_total
-    
-    # Gray Level Vector: PyRadiomics uses 1-based indices (1, 2, 3...) for features
     i_vec = np.arange(1, N_bins + 1, dtype=np.float64)
     
-    # Identify non-zeros for efficiency (Ngp calculation)
-    nz_indices = np.where(p_i > 0)[0]
-    Ngp = len(nz_indices)
+    # Filter non-zeros
+    nz_mask = (p_i > 0)
+    p_i_nz = p_i[nz_mask]
+    S_i_nz = S_i[nz_mask]
+    i_vec_nz = i_vec[nz_mask]
+    Ngp = len(p_i_nz)
     
     # --- Coarseness ---
     sum_pi_si = np.sum(p_i * S_i)
@@ -144,10 +180,8 @@ def ngtdm(image, mask, binWidth=25, distance=1):
 
     # --- Contrast ---
     if Ngp > 1:
-        # Standard deviation term involves double sum over p_i * p_j * (i-j)^2
-        # Vectorized: Outer product
-        i_diff = i_vec[:, None] - i_vec[None, :]
-        p_prod = np.outer(p_i, p_i)
+        i_diff = i_vec_nz[:, None] - i_vec_nz[None, :]
+        p_prod = np.outer(p_i_nz, p_i_nz)
         
         term1 = np.sum(p_prod * (i_diff**2)) / (Ngp * (Ngp - 1))
         term2 = np.sum(S_i) / N_total
@@ -156,30 +190,25 @@ def ngtdm(image, mask, binWidth=25, distance=1):
         contrast = 0.0
 
     # --- Busyness ---
-    # Denom: sum |i*p_i - j*p_j|
-    ip = i_vec * p_i
+    ip = i_vec_nz * p_i_nz
     denom_busy = np.sum(np.abs(ip[:, None] - ip[None, :]))
-    
     busyness = np.sum(p_i * S_i) / denom_busy if denom_busy != 0 else 0.0
 
     # --- Complexity ---
-    # Term: |i-j| * ( (p_i s_i + p_j s_j) / (p_i + p_j) )
-    p_sum = p_i[:, None] + p_i[None, :]
-    p_sum[p_sum == 0] = 1.0 # Avoid div by zero (numerator will be 0 anyway)
+    i_diff_abs = np.abs(i_vec_nz[:, None] - i_vec_nz[None, :])
     
-    pi_si = p_i * S_i
+    p_sum = p_i_nz[:, None] + p_i_nz[None, :]
+    p_sum[p_sum == 0] = 1.0 
+    
+    pi_si = p_i_nz * S_i_nz
     num_complex = pi_si[:, None] + pi_si[None, :]
     
-    term_complex = (np.abs(i_diff) * num_complex) / p_sum
+    term_complex = (i_diff_abs * num_complex) / p_sum
     complexity = np.sum(term_complex) / N_total
 
     # --- Strength ---
-    # Num: (p_i + p_j) * (i-j)^2
-    # Denom: sum(S_i)
-    # Force p_sum to be clean again just in case
-    p_sum = p_i[:, None] + p_i[None, :]
-    
-    strength_num = np.sum(p_sum * (i_diff**2))
+    p_sum_clean = p_i_nz[:, None] + p_i_nz[None, :]
+    strength_num = np.sum(p_sum_clean * ((i_vec_nz[:, None] - i_vec_nz[None, :])**2))
     strength_denom = np.sum(S_i)
     
     strength = strength_num / strength_denom if strength_denom != 0 else 0.0

@@ -4,7 +4,7 @@ from numpyradiomics.mod_shape_2d import shape_2d, shape_2d_units
 from numpyradiomics.mod_ski_shape_3d import ski_shape_3d, ski_shape_3d_units
 
 
-def shape(mask:np.ndarray, spacing=(1.0, 1.0, 1.0), extend=True):
+def shape(mask:np.ndarray, spacing=(1.0, 1.0, 1.0), transpose=False, extend=True):
     """
     Compute shape descriptors for a binary mask in 2D or 3D.
     
@@ -22,6 +22,10 @@ def shape(mask:np.ndarray, spacing=(1.0, 1.0, 1.0), extend=True):
         - For 2D: (y_spacing, x_spacing).
         - For 3D: (z_spacing, y_spacing, x_spacing).
         Defaults to unit spacing (1.0, 1.0, 1.0).
+    transpose : bool, optional
+        If False (default), the shape function expects axis ordering to be (Z, Y, X), 
+        or (Y, X) i.e. slice, column, row. If the axes ordering is 
+        (X, Y, Z) or (X, Y) then you must specify transpose = True.
     extend : bool, optional
         If True (default), and the input is 3D, the returned dictionary includes 
         additional shape metrics derived from `skimage.measure.regionprops` 
@@ -90,22 +94,29 @@ def shape(mask:np.ndarray, spacing=(1.0, 1.0, 1.0), extend=True):
     Volume: 216.0
     >>> print(f"Solidity: {features.get('Solidity', 'N/A')}")
     Solidity: 1.0
-    """
+    """   
     if np.ndim(mask) == 2:
+        if transpose:
+            spacing = np.flip(spacing)
+            mask = mask.transpose(1, 0)
         return shape_2d(mask, spacing)
+    
     if np.ndim(mask) == 3:
+        if transpose:
+            spacing = np.flip(spacing)
+            mask = mask.transpose(2, 1, 0)
         shape = shape_3d(mask, spacing)
         if extend:
             shape = shape | ski_shape_3d(mask, spacing)
         return shape
     
 
-def shape_units(dim:int, voxel_unit='mm'):
+def shape_units(dim:int, voxel_unit:str):
     """Units of returned shape metrics
 
     Args:
         dim (int): nr of dimensions (2 or 3)
-        voxel_unit (str, optional): unit of voxel length
+        voxel_unit (str): unit of voxel length
 
     Returns:
         dict: features and their units

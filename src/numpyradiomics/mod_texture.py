@@ -1,3 +1,6 @@
+import numpy as np
+from typing import Optional, List
+
 from .mod_glcm import glcm, glcm_units
 from .mod_gldm import gldm, gldm_units
 from .mod_glrlm import glrlm, glrlm_units
@@ -5,8 +8,19 @@ from .mod_glszm import glszm, glszm_units
 from .mod_ngtdm import ngtdm, ngtdm_units
 
 
-
-def texture(image, mask, binWidth=25, distances=[1], distance=1, alpha=0, levels=None, connectivity=None, symmetricalGLCM=True, weightingNorm=None):
+def texture(
+    image: np.ndarray, 
+    mask: np.ndarray, 
+    binWidth: float = 25, 
+    binCount: Optional[int] = None,
+    distances: List[int] = [1], 
+    distance: int = 1, 
+    alpha: int = 0, 
+    levels: Optional[int] = None, 
+    connectivity: Optional[int] = None, 
+    symmetricalGLCM: bool = True, 
+    weightingNorm: Optional[str] = None
+):
     """
     Wrapper to compute all texture features (GLCM, GLDM, GLRLM, GLSZM, NGTDM) in a single call.
     
@@ -16,7 +30,10 @@ def texture(image, mask, binWidth=25, distances=[1], distance=1, alpha=0, levels
     Args:
         image (np.ndarray): 3D image array containing voxel intensities.
         mask (np.ndarray): 3D mask array (same shape as image), where non-zero values indicate the ROI.
-        binWidth (float, optional): Bin width for discretization (used by all matrices). Default is 25.
+        binWidth (float, optional): Bin width for 'Fixed Bin Width' discretization. 
+                                    Used if binCount is None. Default is 25.
+        binCount (int, optional): Number of bins for 'Fixed Bin Count' discretization. 
+                                  If specified, it overrides binWidth. Default is None.
         distances (list, optional): List of pixel distances for GLCM. Default is [1].
         distance (int, optional): Integer pixel distance for NGTDM. Default is 1.
         alpha (int, optional): Alpha cutoff for GLDM dependence. Default is 0.
@@ -38,8 +55,8 @@ def texture(image, mask, binWidth=25, distances=[1], distance=1, alpha=0, levels
         >>> # Generate a noisy ellipsoid
         >>> img, mask = npr.dro.noisy_ellipsoid(radii_mm=(15, 15, 15), intensity_range=(0, 100))
         >>> 
-        >>> # Compute all texture features
-        >>> feats = npr.texture(img, mask, binWidth=10)
+        >>> # Compute all texture features using Fixed Bin Count (MRI style)
+        >>> feats = npr.texture(img, mask, binCount=32)
         >>> 
         >>> print(f"GLCM Contrast: {feats['glcm_Contrast']:.4f}")
         GLCM Contrast: 12.4501
@@ -49,10 +66,10 @@ def texture(image, mask, binWidth=25, distances=[1], distance=1, alpha=0, levels
     results = {}
     
     # --- 1. GLCM ---
-    # Signature: glcm(img, mask, binWidth, distances, symmetricalGLCM, weightingNorm)
     try:
         res = glcm(image, mask, 
                    binWidth=binWidth, 
+                   binCount=binCount,
                    distances=distances, 
                    symmetricalGLCM=symmetricalGLCM, 
                    weightingNorm=weightingNorm)
@@ -62,28 +79,42 @@ def texture(image, mask, binWidth=25, distances=[1], distance=1, alpha=0, levels
 
     # --- 2. GLDM ---
     try:
-        res = gldm(image, mask, binWidth=binWidth, alpha=alpha, levels=levels)
+        # Note: levels is mostly legacy/helper, but passed if provided
+        res = gldm(image, mask, 
+                   binWidth=binWidth, 
+                   binCount=binCount,
+                   alpha=alpha)
         results.update({f"gldm_{k}": v for k, v in res.items()})
     except Exception as e:
         print(f"GLDM failed: {e}")
 
     # --- 3. GLRLM ---
     try:
-        res = glrlm(image, mask, binWidth=binWidth, levels=levels)
+        res = glrlm(image, mask, 
+                    binWidth=binWidth, 
+                    binCount=binCount,
+                    levels=levels)
         results.update({f"glrlm_{k}": v for k, v in res.items()})
     except Exception as e:
         print(f"GLRLM failed: {e}")
 
     # --- 4. GLSZM ---
     try:
-        res = glszm(image, mask, binWidth=binWidth, levels=levels, connectivity=connectivity)
+        res = glszm(image, mask, 
+                    binWidth=binWidth, 
+                    binCount=binCount,
+                    levels=levels, 
+                    connectivity=connectivity)
         results.update({f"glszm_{k}": v for k, v in res.items()})
     except Exception as e:
         print(f"GLSZM failed: {e}")
 
     # --- 5. NGTDM ---
     try:
-        res = ngtdm(image, mask, binWidth=binWidth, distance=distance)
+        res = ngtdm(image, mask, 
+                    binWidth=binWidth, 
+                    binCount=binCount,
+                    distance=distance)
         results.update({f"ngtdm_{k}": v for k, v in res.items()})
     except Exception as e:
         print(f"NGTDM failed: {e}")

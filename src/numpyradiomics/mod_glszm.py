@@ -1,7 +1,18 @@
+from typing import Optional, Union
+
 import numpy as np
 from scipy.ndimage import label
 
-def glszm(image, mask, binWidth=25, levels=None, connectivity=None):
+from .mod_preproc import _discretize_image
+
+def glszm(
+    image: np.ndarray, 
+    mask: np.ndarray, 
+    binWidth: float = 25, 
+    binCount: Optional[int] = None,
+    levels: Optional[int] = None, 
+    connectivity: Optional[int] = None
+):
     """
     Compute 16 Pyradiomics-style GLSZM (Gray Level Size Zone Matrix) features.
 
@@ -11,10 +22,12 @@ def glszm(image, mask, binWidth=25, levels=None, connectivity=None):
     Args:
         image (np.ndarray): 3D image array containing voxel intensities.
         mask (np.ndarray): 3D mask array (same shape as image), where non-zero values indicate the ROI.
-        binWidth (float, optional): Width of bins for discretization. Default is 25.
-        levels (int, optional): Number of levels for discretization. If None, calculated from binWidth.
+        binWidth (float, optional): Width of bins for 'Fixed Bin Width' discretization. Default is 25.
+        binCount (int, optional): Number of bins for 'Fixed Bin Count' discretization. 
+                                  If specified, overrides binWidth logic. Default is None.
+        levels (int, optional): (Deprecated) Number of levels. If None, calculated dynamically.
         connectivity (int, optional): Connectivity kernel (e.g., 6, 18, 26 for 3D). 
-                                    Default is None (26-connected in 3D, 8-connected in 2D).
+                                      Default is None (26-connected in 3D, 8-connected in 2D).
 
     Returns:
         dict: Dictionary containing the 16 GLSZM features:
@@ -50,24 +63,18 @@ def glszm(image, mask, binWidth=25, levels=None, connectivity=None):
     if not np.any(roi_mask):
         raise ValueError("Mask contains no voxels.")
 
-    # 1. Quantization
-    roi_image = image.copy()
-    min_val = np.min(roi_image[roi_mask])
+    # --- Step 1: Discretization ---
+    img_q = _discretize_image(image, mask, binWidth=binWidth, binCount=binCount)
     
+    # 4. Handle Levels (Legacy/Safety)
     if levels is None:
-        max_val = np.max(roi_image[roi_mask])
-        levels = int(np.floor((max_val - min_val) / binWidth)) + 1
-        
-    diff = roi_image - min_val
-    diff[roi_mask] = np.maximum(diff[roi_mask], 0)
-    
-    # 1-based indexing (0 = background)
-    img_q = np.floor(diff / binWidth).astype(np.int32) + 1
-    img_q[~roi_mask] = 0
-    img_q = np.clip(img_q, 0, levels)
+        levels = int(img_q.max())
+    else:
+        img_q = np.clip(img_q, 0, levels)
 
-    # 2. Zone Counting
+    # --- Step 2: Zone Counting ---
     dims = image.ndim
+    
     # Default connectivity: 8 (2D) or 26 (3D) -> All neighbors
     if connectivity is None:
         connectivity = 26 if dims == 3 else 8
@@ -75,37 +82,39 @@ def glszm(image, mask, binWidth=25, levels=None, connectivity=None):
     structure = _get_connectivity_structure(dims, connectivity)
     
     # Initialize Matrix: Rows (Gray Levels) x Cols (Zone Sizes)
-    # Max zone size is the total ROI volume
+    # Max potential zone size is the total ROI volume (all voxels connected)
     max_zone = np.sum(roi_mask)
+    
+    # We build the matrix. Note: zone size 1 is index 0. Gray level 1 is index 0.
     glszm_mat = np.zeros((levels, max_zone + 1), dtype=np.float64)
     
-    # Iterate over active gray levels
     # Optimization: Only process levels present in the ROI
     active_levels = np.unique(img_q[roi_mask])
     
     for g in active_levels:
         if g == 0: continue
         
-        # Binary mask for this gray level
+        # Binary mask for this specific gray level
         mask_g = (img_q == g)
         
-        # Connected components
+        # Connected components labeling
+        # labeled_map is an integer array where each zone has a unique ID
         labeled_map, num_features = label(mask_g, structure=structure)
         
         if num_features > 0:
             # Count sizes of each zone
             # bincount returns counts for label 0 (background), 1, 2...
-            # We skip index 0.
+            # We skip index 0 (background of the mask_g).
             sizes = np.bincount(labeled_map.ravel())[1:]
             
             # Accumulate into matrix
             # g-1 because matrix is 0-indexed for gray levels
             # sizes-1 because matrix is 0-indexed for sizes (size 1 -> index 0)
-            # Use np.add.at for vectorization
             np.add.at(glszm_mat, (g - 1, sizes - 1), 1)
 
-    # 3. Compute Features
-    Np = max_zone # Total number of voxels in ROI
+    # --- Step 3: Compute Features ---
+    # Np is the total number of voxels in the ROI (used for ZonePercentage)
+    Np = max_zone 
     return _compute_glszm_features(glszm_mat, Np)
 
 def _get_connectivity_structure(dims, connectivity):

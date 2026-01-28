@@ -1,6 +1,15 @@
 import numpy as np
+from typing import Optional, List, Union
 
-def gldm(image, mask, binWidth=25, alpha=0, levels=None):
+from .mod_preproc import _discretize_image
+
+def gldm(
+    image: np.ndarray, 
+    mask: np.ndarray, 
+    binWidth: float = 25, 
+    binCount: Optional[int] = None,
+    alpha: int = 0
+):
     """
     Compute 15 Pyradiomics-style GLDM (Gray Level Dependence Matrix) features.
 
@@ -11,10 +20,11 @@ def gldm(image, mask, binWidth=25, alpha=0, levels=None):
     Args:
         image (np.ndarray): 3D image array containing voxel intensities.
         mask (np.ndarray): 3D mask array (same shape as image), where non-zero values indicate the ROI.
-        binWidth (float, optional): Width of bins for discretization. Default is 25.
+        binWidth (float, optional): Width of bins for 'Fixed Bin Width' discretization. Default is 25.
+        binCount (int, optional): Number of bins for 'Fixed Bin Count' discretization. 
+                                  If specified, overrides binWidth logic. Default is None.
         alpha (int, optional): Cutoff for dependence. Neighbors are "dependent" if |val - center| <= alpha. 
                                Default is 0 (exact match).
-        levels (int, optional): Number of levels for discretization. If None, calculated from binWidth.
 
     Returns:
         dict: Dictionary containing the 15 GLDM features:
@@ -45,29 +55,20 @@ def gldm(image, mask, binWidth=25, alpha=0, levels=None):
         >>> print(f"DependenceEntropy: {feats['DependenceEntropy']:.4f}")
         DependenceEntropy: 2.1543
     """
-    roi_mask = mask > 0
-    if not np.any(roi_mask):
+    if not np.any(mask > 0):
         raise ValueError("Mask contains no voxels.")
 
-    # 1. Quantization
-    roi_image = image.copy()
-    min_val = np.min(roi_image[roi_mask])
+    # --- Step 1: Discretization ---
+    img_q = _discretize_image(image, mask, binWidth=binWidth, binCount=binCount)
     
-    if levels is None:
-        max_val = np.max(roi_image[roi_mask])
-        levels = int(np.floor((max_val - min_val) / binWidth)) + 1
-    
-    # 1-based indexing for levels
-    # Clamp to avoid potential floor() underflow/overflow at boundaries
-    diff = roi_image - min_val
-    diff[roi_mask] = np.maximum(diff[roi_mask], 0)
-    
-    img_q = np.floor(diff / binWidth).astype(np.int32) + 1
-    img_q[~roi_mask] = 0
-    img_q = np.clip(img_q, 0, levels) 
+    # Calculate Ng (Number of Gray Levels)
+    # PyRadiomics definition: max discretized value
+    levels = int(img_q.max())
 
-    # 2. Vectorized Neighbor Counting
+    # --- Step 2: Neighbor Counting (Vectorized) ---
     dims = image.ndim
+    
+    # Define Offsets (Chebyshev distance 1)
     if dims == 2:
         offsets = [(0,1), (0,-1), (1,0), (-1,0), (1,1), (1,-1), (-1,1), (-1,-1)]
     elif dims == 3:
@@ -77,7 +78,11 @@ def gldm(image, mask, binWidth=25, alpha=0, levels=None):
                 for x in [-1, 0, 1]:
                     if not (z==0 and y==0 and x==0):
                         offsets.append((z, y, x))
-    
+    else:
+        raise ValueError("GLDM only supports 2D or 3D images.")
+
+    # Calculate Dependencies
+    # We create a map where each voxel contains the count of its dependent neighbors
     dependency_map = np.zeros(img_q.shape, dtype=np.int32)
     
     for shift in offsets:
@@ -94,28 +99,40 @@ def gldm(image, mask, binWidth=25, alpha=0, levels=None):
                 src_slices.append(slice(None))
                 dst_slices.append(slice(None))
         
+        # Get shifted views
         src_vals = img_q[tuple(src_slices)]
         dst_vals = img_q[tuple(dst_slices)]
         
+        # Check Dependency Condition:
+        # 1. Both voxels must be inside the ROI (>0)
+        # 2. Absolute difference <= alpha
         match = (src_vals > 0) & (dst_vals > 0) & (np.abs(src_vals - dst_vals) <= alpha)
         
+        # Add matches to the dependency map
         temp_map = np.zeros_like(dependency_map)
         temp_map[tuple(src_slices)] = match
         dependency_map += temp_map
 
-    # 3. Build Matrix
+    # --- Step 3: Build Matrix (GLDM) ---
+    # We only consider voxels inside the ROI
     valid_mask = (img_q > 0)
     flat_gray = img_q[valid_mask]      
     flat_dep  = dependency_map[valid_mask] 
     
+    # Ng = Number of gray levels
+    # Nd = Max possible dependencies (26 in 3D, 8 in 2D)
     Ng = levels
-    max_dep = len(offsets)
+    Nd = len(offsets)
     
+    # Use histogram2d to build the matrix P(i, j)
+    # i = gray level (1..Ng) -> mapped to 0..Ng-1
+    # j = dependency count (0..Nd) -> mapped to 0..Nd
+    # Note: flat_gray is 1-based, so subtract 1 for 0-based indexing
     P = np.histogram2d(
         flat_gray - 1, 
         flat_dep, 
-        bins=[Ng, max_dep + 1], 
-        range=[[0, Ng], [0, max_dep + 1]]
+        bins=[Ng, Nd + 1], 
+        range=[[0, Ng], [0, Nd + 1]]
     )[0]
 
     return _compute_gldm_features(P)

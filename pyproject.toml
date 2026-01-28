@@ -11,6 +11,7 @@ dependencies = [
     "numpy>=1.20",
     "scipy>=1.7",
     "scikit-image>=0.18",
+    "PyWavelets"
 ]
 # optional information
 description = "A light-weight python-native implementation of pyradiomics"

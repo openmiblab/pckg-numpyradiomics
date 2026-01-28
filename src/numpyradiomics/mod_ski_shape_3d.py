@@ -101,7 +101,6 @@ def ski_shape_3d(image, spacing=(1.0, 1.0, 1.0)):
 
     return {
         'MaximumDepth': max_depth_mm, # mm
-        'LongestCaliperDiameter': props['feret_diameter_max'] * iso_spacing,
         'BoundingBoxVolume': props['area_bbox'] * isotropic_voxel_vol, # mm^3
         'ConvexHullVolume': props['area_convex'] * isotropic_voxel_vol,# mm^3
         'FirstMomentOfInertia': m0 * (iso_spacing**2),
@@ -114,6 +113,9 @@ def ski_shape_3d(image, spacing=(1.0, 1.0, 1.0)):
     
         # Note: removing features that are a direct function of a single other feature 
         # alread in the list, or differs only in implementation detail (e.g. resolution-dependent)
+
+        # Same as maximum3DDiameter in pyradiomics
+        # 'LongestCaliperDiameter': props['feret_diameter_max'] * iso_spacing,
             
         # Same as SurfaceArea - remove
         # 'surface_area': surface_area,                              # mm^2
@@ -189,5 +191,4 @@ def ski_shape_3d_units(base_unit='mm'):
         'ThirdMomentOfInertia': f"{base_unit}^2",
         'MeanMomentOfInertia': f"{base_unit}^2",
         'FractionalAnisotropyOfInertia': '', # Dimensionless (0-1)
-        'LongestCaliperDiameter': base_unit,
     }

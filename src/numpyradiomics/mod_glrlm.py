@@ -1,7 +1,16 @@
+from typing import Optional, Union
 import numpy as np
 from numpy.lib.stride_tricks import as_strided
 
-def glrlm(image, mask, binWidth=25, levels=None):
+from .mod_preproc import _discretize_image
+
+def glrlm(
+    image: np.ndarray, 
+    mask: np.ndarray, 
+    binWidth: float = 25, 
+    binCount: Optional[int] = None, 
+    levels: Optional[int] = None
+):
     """
     Compute 16 Pyradiomics-style GLRLM (Gray Level Run Length Matrix) features.
 
@@ -13,8 +22,10 @@ def glrlm(image, mask, binWidth=25, levels=None):
     Args:
         image (np.ndarray): 3D image array containing voxel intensities.
         mask (np.ndarray): 3D mask array (same shape as image), where non-zero values indicate the ROI.
-        binWidth (float, optional): Width of bins for discretization. Default is 25.
-        levels (int, optional): Number of levels for discretization. If None, calculated from binWidth.
+        binWidth (float, optional): Width of bins for 'Fixed Bin Width' discretization. Default is 25.
+        binCount (int, optional): Number of bins for 'Fixed Bin Count' discretization. 
+                                  If specified, overrides binWidth logic. Default is None.
+        levels (int, optional): (Deprecated) Number of levels. If None, calculated dynamically from the discretized image.
 
     Returns:
         dict: Dictionary containing the 16 GLRLM features (averaged over all directions):
@@ -46,47 +57,53 @@ def glrlm(image, mask, binWidth=25, levels=None):
         >>> print(f"RunPercentage: {feats['RunPercentage']:.4f}")
         RunPercentage: 0.8241
     """
-    roi_mask = mask > 0
-    if not np.any(roi_mask):
+    if not np.any(mask > 0):
         raise ValueError("Mask contains no voxels.")
 
-    # 1. Quantization
-    roi_image = image.copy()
-    min_val = np.min(roi_image[roi_mask])
+    # --- Step 1: Discretization ---
+    img_q = _discretize_image(image, mask, binWidth=binWidth, binCount=binCount)
     
+    # 4. Determine Levels
+    # If levels were manually passed (legacy), we can cap, but standard behavior
+    # is to derive it from the discretized max value.
     if levels is None:
-        max_val = np.max(roi_image[roi_mask])
-        levels = int(np.floor((max_val - min_val) / binWidth)) + 1
-    
-    diff = roi_image - min_val
-    diff[roi_mask] = np.maximum(diff[roi_mask], 0)
-    
-    img_q = np.floor(diff / binWidth).astype(np.int32) + 1
-    img_q[~roi_mask] = 0
-    img_q = np.clip(img_q, 0, levels)
+        levels = int(img_q.max())
+    else:
+        # If user forces levels, we clip (though discretize usually handles this)
+        img_q = np.clip(img_q, 0, levels)
 
-    # 2. Compute Features per Angle
+    # --- Step 2: Compute Features per Angle ---
     dims = image.ndim
     angles = _get_angles(dims)
     max_dim = max(img_q.shape)
-    Np = np.sum(roi_mask)
+    
+    # Number of voxels in ROI
+    Np = np.sum(mask > 0)
     
     feature_sums = {}
     valid_angles = 0
     
     for angle in angles:
         # Build Matrix for THIS angle
+        # Rows: Gray Levels (1..levels)
+        # Cols: Run Lengths (1..max_dim)
         glrlm_mat = np.zeros((levels, max_dim + 1), dtype=np.float64)
         
+        # _compute_runs_skewed is a highly optimized helper using stride tricks
+        # It expects 0 as background and 1..N as foreground.
         runs, lengths = _compute_runs_skewed(img_q, angle)
         
         if len(runs) > 0:
+            # Clip lengths to matrix dimensions (safety)
             safe_lengths = np.clip(lengths, 1, max_dim + 1)
+            
+            # Populate Matrix (subtract 1 for 0-based indexing)
             np.add.at(glrlm_mat, (runs - 1, safe_lengths - 1), 1)
             
-            # Compute features for this angle
+            # Compute features for this specific angle
             feats = _compute_glrlm_features(glrlm_mat, Np)
             
+            # Accumulate
             if not feature_sums:
                 feature_sums = {k: 0.0 for k in feats}
             
@@ -94,7 +111,7 @@ def glrlm(image, mask, binWidth=25, levels=None):
                 feature_sums[k] += v
             valid_angles += 1
 
-    # 3. Average Features
+    # --- Step 3: Average Features ---
     if valid_angles == 0:
         return {} 
         
